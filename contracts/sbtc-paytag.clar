@@ -218,3 +218,101 @@
     )
   )
 )
+
+;; Fulfill a payment tag by transferring sBTC to the recipient
+(define-public (fulfill-pay-tag (id uint))
+  (let (
+      (validated-id id) ;; Store validated ID
+      (tag (unwrap! (map-get? pay-tags { id: validated-id }) (err ERR-NOT-FOUND)))
+      (placeholder-tx-hash 0x) ;; Placeholder for transaction hash
+    )
+    (begin
+      ;; Input validation
+      (asserts! (validate-tag-id validated-id) (err ERR-NOT-FOUND))
+      ;; State validation
+      (asserts! (is-eq (get state tag) STATE-PENDING) (err ERR-NOT-PENDING))
+      (asserts! (< stacks-block-height (get expires-at tag)) (err ERR-EXPIRED))
+      ;; Additional security: ensure sender is not recipient (prevent self-payment exploits)
+      (asserts! (not (is-eq tx-sender (get recipient tag)))
+        (err ERR-UNAUTHORIZED)
+      )
+      ;; Execute sBTC transfer from payer to recipient
+      (try! (contract-call? SBTC-CONTRACT transfer (get amount tag) tx-sender
+        (get recipient tag) none
+      ))
+      ;; Update payment tag state to paid using validated ID
+      (map-set pay-tags { id: validated-id }
+        (merge tag {
+          state: STATE-PAID,
+          payment-tx: none, ;; Placeholder since tx-hash isn't directly accessible
+        })
+      )
+      ;; Emit payment completion event with validated data
+      (print {
+        event: "pay-tag-paid",
+        id: validated-id,
+        from: tx-sender,
+        to: (get recipient tag),
+        amount: (get amount tag),
+        memo: (get memo tag),
+      })
+      (ok validated-id)
+    )
+  )
+)
+
+;; Cancel a pending payment tag (creator only)
+(define-public (cancel-pay-tag (id uint))
+  (let (
+      (validated-id id) ;; Store validated ID
+      (tag (unwrap! (map-get? pay-tags { id: validated-id }) (err ERR-NOT-FOUND)))
+    )
+    (begin
+      ;; Input validation
+      (asserts! (validate-tag-id validated-id) (err ERR-NOT-FOUND))
+      ;; Authorization check
+      (asserts! (is-eq tx-sender (get creator tag)) (err ERR-UNAUTHORIZED))
+      (asserts! (is-eq (get state tag) STATE-PENDING) (err ERR-NOT-PENDING))
+      ;; Update state to canceled using validated ID
+      (map-set pay-tags { id: validated-id }
+        (merge tag { state: STATE-CANCELED })
+      )
+      ;; Emit cancellation event with validated data
+      (print {
+        event: "pay-tag-canceled",
+        id: validated-id,
+        creator: tx-sender,
+      })
+      (ok validated-id)
+    )
+  )
+)
+
+;; Mark an expired payment tag as expired (callable by anyone)
+(define-public (mark-expired (id uint))
+  (let (
+      (validated-id id) ;; Store validated ID
+      (tag (unwrap! (map-get? pay-tags { id: validated-id }) (err ERR-NOT-FOUND)))
+    )
+    (begin
+      ;; Input validation
+      (asserts! (validate-tag-id validated-id) (err ERR-NOT-FOUND))
+      ;; State validation
+      (asserts! (is-eq (get state tag) STATE-PENDING) (err ERR-NOT-PENDING))
+      (asserts! (is-expired (get expires-at tag)) (err u107))
+      ;; Update state to expired using validated ID
+      (map-set pay-tags { id: validated-id } (merge tag { state: STATE-EXPIRED }))
+      ;; Emit expiration event with validated data
+      (print {
+        event: "pay-tag-expired",
+        id: validated-id,
+      })
+      (ok validated-id)
+    )
+  )
+)
+
+;; Batch retrieval function for multiple payment tags (UI optimization)
+(define-public (get-multiple-tags (ids (list 20 uint)))
+  (ok (map get-tag-or-none ids))
+)
