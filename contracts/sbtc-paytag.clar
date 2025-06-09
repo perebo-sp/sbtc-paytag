@@ -84,3 +84,73 @@
     )
   )
 )
+
+;; Utility function to check if a payment tag has expired
+(define-private (is-expired (expires-at uint))
+  (>= stacks-block-height expires-at)
+)
+
+;; Helper function for batch operations
+(define-private (get-tag-or-none (id uint))
+  (map-get? pay-tags { id: id })
+)
+
+;; Secure validation function for memo input
+(define-private (validate-memo (memo (optional (string-ascii 256))))
+  (match memo
+    some-memo (and (> (len some-memo) u0) (<= (len some-memo) u256))
+    true
+  )
+)
+
+;; None is always valid
+
+;; Secure validation function for payment tag ID
+(define-private (validate-tag-id (id uint))
+  (and (> id u0) (<= id (var-get last-id)))
+)
+
+;; Read-Only Functions
+
+;; Get the current payment tag ID counter
+(define-read-only (get-last-id)
+  (ok (var-get last-id))
+)
+
+;; Retrieve complete details of a specific payment tag
+(define-read-only (get-pay-tag (id uint))
+  (match (map-get? pay-tags { id: id })
+    entry (ok entry)
+    (err ERR-NOT-FOUND)
+  )
+)
+
+;; Get all payment tag IDs created by a specific principal
+(define-read-only (get-creator-tags (creator principal))
+  (match (map-get? tags-by-creator { creator: creator })
+    entry (ok (get ids entry))
+    (ok (list))
+  )
+)
+
+;; Get all payment tag IDs where a principal is the recipient
+(define-read-only (get-recipient-tags (recipient principal))
+  (match (map-get? tags-by-recipient { recipient: recipient })
+    entry (ok (get ids entry))
+    (ok (list))
+  )
+)
+
+;; Check if a payment tag is expired but not yet marked as expired
+(define-read-only (check-tag-expired (id uint))
+  (match (map-get? pay-tags { id: id })
+    tag (if (and
+        (is-eq (get state tag) STATE-PENDING)
+        (is-expired (get expires-at tag))
+      )
+      (ok true)
+      (ok false)
+    )
+    (err ERR-NOT-FOUND)
+  )
+)
