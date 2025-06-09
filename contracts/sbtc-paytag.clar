@@ -154,3 +154,67 @@
     (err ERR-NOT-FOUND)
   )
 )
+
+;; Public Functions
+
+;; Create a new payment tag with specified amount and expiration
+(define-public (create-pay-tag
+    (amount uint)
+    (expires-in uint)
+    (memo (optional (string-ascii 256)))
+  )
+  (let (
+      (new-id (+ (var-get last-id) u1))
+      (expiration-height (+ stacks-block-height expires-in))
+      (recipient tx-sender) ;; Default recipient is sender, could be parameterized
+      (validated-memo memo) ;; Store validated memo
+    )
+    (begin
+      ;; Comprehensive input validation
+      (asserts! (> amount u0) (err ERR-INVALID-AMOUNT))
+      (asserts! (<= expires-in MAX-EXPIRATION-BLOCKS)
+        (err ERR-MAX-EXPIRATION-EXCEEDED)
+      )
+      (asserts! (> expires-in u0) (err ERR-INVALID-AMOUNT)) ;; Ensure positive expiration
+      (asserts! (validate-memo memo) (err ERR-EMPTY-MEMO))
+      ;; Check for potential overflow in expiration calculation
+      (asserts!
+        (< expires-in
+          (- u340282366920938463463374607431768211455 stacks-block-height)
+        )
+        (err ERR-MAX-EXPIRATION-EXCEEDED)
+      )
+      ;; Update counter and create payment tag
+      (var-set last-id new-id)
+      (map-set pay-tags { id: new-id } {
+        creator: tx-sender,
+        recipient: recipient,
+        amount: amount,
+        created-at: stacks-block-height,
+        expires-at: expiration-height,
+        memo: validated-memo,
+        state: STATE-PENDING,
+        payment-tx: none,
+      })
+      ;; Update creator's index
+      (let ((creator-result (add-id-to-principal-list tx-sender new-id)))
+        ;; If recipient differs from creator, update recipient's index
+        (if (not (is-eq recipient tx-sender))
+          (let ((recipient-result (add-id-to-principal-list recipient new-id)))
+            true
+          )
+          true
+        )
+      )
+      ;; Emit creation event with validated data
+      (print {
+        event: "pay-tag-created",
+        id: new-id,
+        creator: tx-sender,
+        amount: amount,
+        expires-at: expiration-height,
+      })
+      (ok new-id)
+    )
+  )
+)
